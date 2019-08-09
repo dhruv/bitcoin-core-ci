@@ -2949,8 +2949,9 @@ CNode::CNode(NodeId idIn, ServiceFlags nLocalServicesIn, std::shared_ptr<Sock> s
 {
     if (inbound_onion) assert(conn_type_in == ConnectionType::INBOUND);
 
-    for (const std::string &msg : getAllNetMessageTypes())
-        mapRecvBytesPerMsgType[msg] = 0;
+    for (const auto& msg : getAllNetMessageTypes()) {
+        mapRecvBytesPerMsgType[msg.second] = 0;
+    }
     mapRecvBytesPerMsgType[NET_MESSAGE_TYPE_OTHER] = 0;
 
     if (fLogIPs) {
