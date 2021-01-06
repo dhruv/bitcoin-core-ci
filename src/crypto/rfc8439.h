@@ -13,6 +13,8 @@
 #include <vector>
 
 constexpr static size_t RFC8439_KEYLEN{32};
+constexpr static size_t RFC8439_EXPANSION{POLY1305_TAGLEN};
+
 using RFC8439Key = std::array<std::byte, RFC8439_KEYLEN>;
 
 void RFC8439Encrypt(const Span<const std::byte> aad, const RFC8439Key& key, const std::array<std::byte, 12>& nonce, const Span<const std::byte> plaintext, Span<std::byte> output);
