@@ -2,9 +2,9 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <crypto/chacha20.h>
-#include <crypto/common.h>
 #include <crypto/rfc8439.h>
+
+#include <crypto/common.h>
 
 #include <cstring>
 
