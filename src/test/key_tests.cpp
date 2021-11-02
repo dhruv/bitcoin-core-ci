@@ -5,6 +5,7 @@
 #include <key.h>
 
 #include <key_io.h>
+#include <random.h>
 #include <streams.h>
 #include <test/util/setup_common.h>
 #include <uint256.h>
@@ -21,6 +22,8 @@ static const std::string strSecret1 = "5HxWvvfubhXpYYpS3tJkw6fq9jE9j18THftkZjHHf
 static const std::string strSecret2 = "5KC4ejrDjv152FGwP386VD1i2NYc5KkfSMyv1nGy1VGDxGHqVY3";
 static const std::string strSecret1C = "Kwr371tjA9u2rFSMZjTNun2PXXP3WPZu2afRHTcta6KxEUdm1vEw";
 static const std::string strSecret2C = "L3Hq7a8FEQwJkW1M2GNKDW28546Vp5miewcCzSqUD9kCAXrJdS3g";
+static const std::string evenPubKeySecret1 = "Kyrkb3zjvC5FDxkj6N1TsTWR2QjSvSbtZxP5K6XBjcKkJvABrBFv";
+static const std::string evenPubKeySecret2 = "L4knVM35t7wEYbwmATH5218E5AmC8MQ6ktBjbxxodYG9uZW1tJSb";
 static const std::string addr1 = "1QFqqMUD55ZV3PJEJZtaKCsQmjLT6JkjvJ";
 static const std::string addr2 = "1F5y5E5FMc5YzdJtB9hLaUe43GDxEKXENJ";
 static const std::string addr1C = "1NoJrossxPBKfCHuJXT4HadJrXRE9Fxiqs";
@@ -342,6 +345,36 @@ BOOST_AUTO_TEST_CASE(bip340_test_vectors)
             BOOST_CHECK(tweaked_key.VerifySchnorr(msg256, sig64));
         }
     }
+}
+
+BOOST_AUTO_TEST_CASE(key_ellswift)
+{
+    size_t encode_decode_tests = 0;
+    for (auto secret : {strSecret1, strSecret2, strSecret1C, strSecret2C, evenPubKeySecret1, evenPubKeySecret2}) {
+        CKey key = DecodeSecret(secret);
+        BOOST_CHECK(key.IsValid());
+
+        std::array<uint8_t, 32> rnd32;
+        GetRandBytes(rnd32);
+        auto original_pubkey = key.GetPubKey();
+        auto ellswift_encoded_pubkey = original_pubkey.EllSwiftEncode(rnd32);
+
+        // only even pubkeys can be ellswift encoded.
+        assert(ellswift_encoded_pubkey.has_value() == (original_pubkey.data()[0] == 0x02));
+
+        if (ellswift_encoded_pubkey.has_value()) {
+            CPubKey decoded_pubkey = CPubKey{ellswift_encoded_pubkey.value()};
+            if (!key.IsCompressed()) {
+                // The decoding constructor returns a compressed pubkey. If the
+                // original was uncompressed, we must decompress the decoded one
+                // to compare.
+                decoded_pubkey.Decompress();
+            }
+            BOOST_CHECK(original_pubkey == decoded_pubkey);
+            encode_decode_tests++;
+        }
+    }
+    BOOST_CHECK(encode_decode_tests > 0);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
