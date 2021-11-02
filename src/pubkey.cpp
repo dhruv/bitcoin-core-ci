@@ -7,6 +7,7 @@
 
 #include <hash.h>
 #include <secp256k1.h>
+#include <secp256k1_ellswift.h>
 #include <secp256k1_extrakeys.h>
 #include <secp256k1_recovery.h>
 #include <secp256k1_schnorrsig.h>
@@ -332,6 +333,21 @@ bool CPubKey::Derive(CPubKey& pubkeyChild, ChainCode &ccChild, unsigned int nChi
     secp256k1_ec_pubkey_serialize(secp256k1_context_verify, pub, &publen, &pubkey, SECP256K1_EC_COMPRESSED);
     pubkeyChild.Set(pub, pub + publen);
     return true;
+}
+
+std::optional<EllSwiftPubKey> CPubKey::EllSwiftEncode(const std::array<uint8_t, 32>& rnd32) const
+{
+    assert(secp256k1_context_verify && "secp256k1_context_verify must be initialized to use CPubKey.");
+
+    secp256k1_pubkey pubkey;
+
+    if (!secp256k1_ec_pubkey_parse(secp256k1_context_verify, &pubkey, vch, size())) {
+        return {};
+    }
+
+    EllSwiftPubKey encoded_pubkey;
+    secp256k1_ellswift_encode(secp256k1_context_verify, encoded_pubkey.data(), &pubkey, rnd32.data());
+    return encoded_pubkey;
 }
 
 void CExtPubKey::Encode(unsigned char code[BIP32_EXTKEY_SIZE]) const {
