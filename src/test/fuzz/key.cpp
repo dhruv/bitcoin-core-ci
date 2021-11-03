@@ -16,9 +16,11 @@
 #include <script/signingprovider.h>
 #include <script/standard.h>
 #include <streams.h>
+#include <test/fuzz/FuzzedDataProvider.h>
 #include <test/fuzz/fuzz.h>
 #include <util/strencodings.h>
 
+#include <array>
 #include <cassert>
 #include <cstdint>
 #include <numeric>
@@ -305,4 +307,35 @@ FUZZ_TARGET_INIT(key, initialize_key)
             assert(key == loaded_key);
         }
     }
+}
+
+FUZZ_TARGET_INIT(ellswift, initialize_key)
+{
+    FuzzedDataProvider fuzzed_data_provider{buffer.data(), buffer.size()};
+    auto pubkey_bytes = fuzzed_data_provider.ConsumeBytes<uint8_t>(CPubKey::COMPRESSED_SIZE);
+    pubkey_bytes.resize(CPubKey::COMPRESSED_SIZE);
+    CPubKey pubkey(pubkey_bytes.begin(), pubkey_bytes.end());
+
+    if (!pubkey.IsFullyValid()) {
+        return;
+    }
+
+    auto rnd32 = fuzzed_data_provider.ConsumeBytes<uint8_t>(32);
+    rnd32.resize(32);
+    std::array<uint8_t, 32> rnd32_array;
+    std::copy(rnd32.begin(), rnd32.end(), rnd32_array.begin());
+    auto ellswift_pubkey = pubkey.EllSwiftEncode(rnd32_array);
+
+    // only even pubkeys can be ellswift encoded
+    assert(ellswift_pubkey.has_value() == (pubkey.data()[0] == 0x02));
+
+    if (!ellswift_pubkey.has_value()) {
+        return;
+    }
+    assert(ellswift_pubkey->size() == ELLSWIFT_ENCODED_SIZE);
+
+    CPubKey decoded_pubkey{ellswift_pubkey.value()};
+    assert(decoded_pubkey.IsFullyValid());
+
+    assert(pubkey == decoded_pubkey);
 }
