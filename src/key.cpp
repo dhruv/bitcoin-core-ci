@@ -9,8 +9,10 @@
 #include <crypto/hmac_sha512.h>
 #include <hash.h>
 #include <random.h>
+#include <support/cleanse.h>
 
 #include <secp256k1.h>
+#include <secp256k1_ecdh.h>
 #include <secp256k1_extrakeys.h>
 #include <secp256k1_recovery.h>
 #include <secp256k1_schnorrsig.h>
@@ -330,6 +332,40 @@ bool CKey::Derive(CKey& keyChild, ChainCode &ccChild, unsigned int nChild, const
     keyChild.fCompressed = true;
     keyChild.fValid = ret;
     return ret;
+}
+
+// Returns just the x-coordinate in big endian
+static int bip324_ecdh_hash(unsigned char* output, const unsigned char* x32, const unsigned char* y32, void* data)
+{
+    memcpy(output, x32, 32);
+    return 1;
+}
+
+bool CKey::ComputeBIP324ECDHSecret(const CPubKey& pubkey, const Span<uint8_t> initiator_hdata, const Span<uint8_t> responder_hdata,
+                                   ECDHSecret& secret) const
+{
+    secp256k1_pubkey pubkey_internal;
+    if (!secp256k1_ec_pubkey_parse(secp256k1_context_sign, &pubkey_internal, pubkey.data(), pubkey.size())) {
+        return false;
+    }
+
+    std::vector<uint8_t, secure_allocator<uint8_t>> xonly_ecdh;
+    xonly_ecdh.resize(ECDH_SECRET_SIZE);
+    assert(secp256k1_ecdh(secp256k1_context_sign, xonly_ecdh.data(), &pubkey_internal,
+                          keydata.data(), bip324_ecdh_hash, NULL));
+
+    CSHA256 hasher;
+    hasher.Write(BIP324_ECDH_TAG.data(), BIP324_ECDH_TAG.size());
+    hasher.Write(BIP324_ECDH_TAG.data(), BIP324_ECDH_TAG.size());
+    hasher.Write(initiator_hdata.data(), initiator_hdata.size());
+    hasher.Write(responder_hdata.data(), responder_hdata.size());
+
+    hasher.Write(xonly_ecdh.data(), xonly_ecdh.size());
+
+    secret.resize(ECDH_SECRET_SIZE);
+    hasher.Finalize(secret.data());
+    memory_cleanse(xonly_ecdh.data(), ECDH_SECRET_SIZE);
+    return true;
 }
 
 bool CExtKey::Derive(CExtKey &out, unsigned int _nChild) const {
