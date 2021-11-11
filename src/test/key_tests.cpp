@@ -5,6 +5,7 @@
 #include <key.h>
 
 #include <key_io.h>
+#include <span.h>
 #include <streams.h>
 #include <test/util/setup_common.h>
 #include <uint256.h>
@@ -342,6 +343,35 @@ BOOST_AUTO_TEST_CASE(bip340_test_vectors)
             BOOST_CHECK(tweaked_key.VerifySchnorr(msg256, sig64));
         }
     }
+}
+
+BOOST_AUTO_TEST_CASE(bip324_ecdh)
+{
+    CKey initiator_key = DecodeSecret(strSecret1);
+    CKey responder_key = DecodeSecret(strSecret2C);
+
+    ECDHSecret initiator_secret, responder_secret;
+    auto initiator_hdata_vec = ParseHex("2deb41da6887640dda029ae41c9c9958881d0bb8e28f6bb9039ee9b7bb11091d62f4cbe65cc418df7aefd738f4d3e926c66365b4d38eefd0a883be64112f4495");
+    auto responder_hdata_vec = ParseHex("4c469c70ba242ae0fc98d4eff6258cf19ecab96611c9c736356a4cf11d66edfa4d2970e56744a6d071861a4cbe2730eb7733a38b166e3df73450ef37112dd32f");
+
+    Span<uint8_t> initiator_hdata{initiator_hdata_vec.data(), initiator_hdata_vec.size()};
+    Span<uint8_t> responder_hdata{responder_hdata_vec.data(), responder_hdata_vec.size()};
+
+    BOOST_CHECK(initiator_key.ComputeBIP324ECDHSecret(responder_key.GetPubKey(), initiator_hdata, responder_hdata, initiator_secret));
+    BOOST_CHECK(responder_key.ComputeBIP324ECDHSecret(initiator_key.GetPubKey(), initiator_hdata, responder_hdata, responder_secret));
+    BOOST_CHECK_EQUAL(initiator_secret.size(), ECDH_SECRET_SIZE);
+    BOOST_CHECK_EQUAL(responder_secret.size(), ECDH_SECRET_SIZE);
+    BOOST_CHECK_EQUAL(0, memcmp(initiator_secret.data(), responder_secret.data(), ECDH_SECRET_SIZE));
+    BOOST_CHECK_EQUAL("09362022b98e0238bf8820fef3250668ef44ecda315ed351513af8980c285e64", HexStr(initiator_secret));
+    BOOST_CHECK_EQUAL("09362022b98e0238bf8820fef3250668ef44ecda315ed351513af8980c285e64", HexStr(responder_secret));
+
+    // ECDH computation with invalid pubkey
+    std::vector<unsigned char> pubkeydata;
+    auto responder_pubkey = responder_key.GetPubKey();
+    pubkeydata.insert(pubkeydata.end(), responder_pubkey.begin(), responder_pubkey.end());
+    pubkeydata[0] = 0xFF;
+    CPubKey invalid_responder_pubkey(pubkeydata);
+    BOOST_CHECK(!initiator_key.ComputeBIP324ECDHSecret(invalid_responder_pubkey, initiator_hdata, responder_hdata, initiator_secret));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

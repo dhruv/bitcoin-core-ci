@@ -7,11 +7,15 @@
 #ifndef BITCOIN_KEY_H
 #define BITCOIN_KEY_H
 
+#include <crypto/sha256.h>
+#include <hash.h>
 #include <pubkey.h>
 #include <serialize.h>
+#include <span.h>
 #include <support/allocators/secure.h>
 #include <uint256.h>
 
+#include <array>
 #include <stdexcept>
 #include <vector>
 
@@ -21,6 +25,12 @@
  * (SIZE bytes)
  */
 typedef std::vector<unsigned char, secure_allocator<unsigned char> > CPrivKey;
+
+constexpr static size_t ECDH_SECRET_SIZE = CSHA256::OUTPUT_SIZE;
+const CHashWriter HASHER_BIP324_ECDH = TaggedHash("secp256k1_ellsq_xonly_ecdh");
+
+// Used to represent a ECDH secret (ECDH_SECRET_SIZE bytes)
+using ECDHSecret = std::array<uint8_t, ECDH_SECRET_SIZE>;
 
 /** An encapsulated private key. */
 class CKey
@@ -156,6 +166,10 @@ public:
 
     //! Load private key and check that public key matches.
     bool Load(const CPrivKey& privkey, const CPubKey& vchPubKey, bool fSkipCheck);
+
+    // Returns false if an invalid public key is provided
+    bool ComputeBIP324ECDHSecret(const CPubKey& pubkey, const Span<const uint8_t> initiator_hdata, const Span<const uint8_t> responder_hdata,
+                                 ECDHSecret& secret) const;
 };
 
 struct CExtKey {
