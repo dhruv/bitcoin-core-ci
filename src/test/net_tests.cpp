@@ -6,6 +6,8 @@
 #include <clientversion.h>
 #include <compat.h>
 #include <cstdint>
+#include <key.h>
+#include <key_io.h>
 #include <net.h>
 #include <net_processing.h>
 #include <netaddress.h>
@@ -912,6 +914,72 @@ BOOST_AUTO_TEST_CASE(initial_advertise_from_version_message)
     // in timedata.cpp and later confuses the test "timedata_tests/addtimedata". Thus reset
     // that state as it was before our test was run.
     TestOnlyResetTimeData();
+}
+
+BOOST_AUTO_TEST_CASE(bip324_derivation_test)
+{
+    // BIP324 key derivation uses network magic in the HKDF process. We use mainnet
+    // params here to make it easier for other implementors to use this test as a test vector.
+    SelectParams(CBaseChainParams::MAIN);
+    static const std::string strSecret1 = "5HxWvvfubhXpYYpS3tJkw6fq9jE9j18THftkZjHHfmFiWtmAbrj";
+    static const std::string strSecret2C = "L3Hq7a8FEQwJkW1M2GNKDW28546Vp5miewcCzSqUD9kCAXrJdS3g";
+    static const std::string initiator_hdata = "2deb41da6887640dda029ae41c9c9958881d0bb8e28f6bb9039ee9b7bb11091d62f4cbe65cc418df7aefd738f4d3e926c66365b4d38eefd0a883be64112f4495";
+    static const std::string responder_hdata = "4c469c70ba242ae0fc98d4eff6258cf19ecab96611c9c736356a4cf11d66edfa4d2970e56744a6d071861a4cbe2730eb7733a38b166e3df73450ef37112dd32f";
+
+    auto initiator_hdata_vec = ParseHex(initiator_hdata);
+    Span<uint8_t> initiator_hdata_span{initiator_hdata_vec.data(), initiator_hdata_vec.size()};
+
+    auto responder_hdata_vec = ParseHex(responder_hdata);
+    Span<uint8_t> responder_hdata_span{responder_hdata_vec.data(), responder_hdata_vec.size()};
+
+    CKey initiator_key = DecodeSecret(strSecret1);
+    CKey responder_key = DecodeSecret(strSecret2C);
+
+    auto initiator_pubkey = initiator_key.GetPubKey();
+    auto responder_pubkey = responder_key.GetPubKey();
+
+    ECDHSecret initiator_secret, responder_secret;
+    BOOST_CHECK(initiator_key.ComputeBIP324ECDHSecret(responder_pubkey, initiator_hdata_span, responder_hdata_span, initiator_secret));
+    BOOST_CHECK(responder_key.ComputeBIP324ECDHSecret(initiator_pubkey, initiator_hdata_span, responder_hdata_span, responder_secret));
+
+    BOOST_CHECK_EQUAL(ECDH_SECRET_SIZE, initiator_secret.size());
+    BOOST_CHECK_EQUAL(ECDH_SECRET_SIZE, responder_secret.size());
+    BOOST_CHECK_EQUAL(0, memcmp(initiator_secret.data(), responder_secret.data(), ECDH_SECRET_SIZE));
+
+    BIP324Keys initiator_keys, responder_keys;
+
+    BOOST_CHECK(DeriveBIP324Keys(std::move(initiator_secret), initiator_hdata_span, responder_hdata_span, initiator_keys));
+    BOOST_CHECK(DeriveBIP324Keys(std::move(responder_secret), initiator_hdata_span, responder_hdata_span, responder_keys));
+
+    // Make sure that the ephemeral ECDH secret is cleansed from memory once the keys are derived.
+    BOOST_CHECK_EQUAL("0000000000000000000000000000000000000000000000000000000000000000", HexStr(initiator_secret));
+    BOOST_CHECK_EQUAL("0000000000000000000000000000000000000000000000000000000000000000", HexStr(responder_secret));
+
+    BOOST_CHECK_EQUAL(BIP324_KEY_LEN, initiator_keys.initiator_F.size());
+    BOOST_CHECK_EQUAL(initiator_keys.initiator_F.size(), responder_keys.initiator_F.size());
+    BOOST_CHECK_EQUAL(0, memcmp(initiator_keys.initiator_F.data(), responder_keys.initiator_F.data(), initiator_keys.initiator_F.size()));
+    BOOST_CHECK_EQUAL("fb9b2551d1ac88a7def2c2e4cfa25592ffbea4c42adf26d83fae50d5f5036415", HexStr(Span{initiator_keys.initiator_F}));
+
+    BOOST_CHECK_EQUAL(BIP324_KEY_LEN, initiator_keys.initiator_V.size());
+    BOOST_CHECK_EQUAL(initiator_keys.initiator_V.size(), responder_keys.initiator_V.size());
+    BOOST_CHECK_EQUAL(0, memcmp(initiator_keys.initiator_V.data(), responder_keys.initiator_V.data(), initiator_keys.initiator_V.size()));
+    BOOST_CHECK_EQUAL("c141b106c8a5ae14e355ab89ca6d8e418945b7313e0d65a8d5742f1f11de5050", HexStr(Span{initiator_keys.initiator_V}));
+
+    BOOST_CHECK_EQUAL(BIP324_KEY_LEN, initiator_keys.responder_F.size());
+    BOOST_CHECK_EQUAL(initiator_keys.responder_F.size(), responder_keys.responder_F.size());
+    BOOST_CHECK_EQUAL(0, memcmp(initiator_keys.responder_F.data(), responder_keys.responder_F.data(), initiator_keys.responder_F.size()));
+    BOOST_CHECK_EQUAL("4a5c97a4317a0e1d65fa69d3d35a74b32ef3bdd2de9910a06709357d5584fee2", HexStr(Span{initiator_keys.responder_F}));
+
+    BOOST_CHECK_EQUAL(BIP324_KEY_LEN, initiator_keys.responder_V.size());
+    BOOST_CHECK_EQUAL(initiator_keys.responder_V.size(), responder_keys.responder_V.size());
+    BOOST_CHECK_EQUAL(0, memcmp(initiator_keys.responder_V.data(), responder_keys.responder_V.data(), initiator_keys.responder_V.size()));
+    BOOST_CHECK_EQUAL("94e374b822bc293b4eb3475aed2457e1b2fc9691df9ffb02afc462c36d513783", HexStr(Span{initiator_keys.responder_V}));
+
+    BOOST_CHECK_EQUAL(BIP324_KEY_LEN, initiator_keys.session_id.size());
+    BOOST_CHECK_EQUAL(initiator_keys.session_id.size(), responder_keys.session_id.size());
+    BOOST_CHECK_EQUAL(0, memcmp(initiator_keys.session_id.data(), responder_keys.session_id.data(), initiator_keys.session_id.size()));
+    BOOST_CHECK_EQUAL("ee02710771429f2cc73edf217a9d4be52b25b946f2b2d5ff2bed9bb7f8ca1a7e", HexStr(Span{initiator_keys.session_id}));
+    SelectParams(CBaseChainParams::REGTEST);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
