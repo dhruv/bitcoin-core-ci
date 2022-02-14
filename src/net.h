@@ -20,6 +20,7 @@
 #include <netbase.h>
 #include <policy/feerate.h>
 #include <protocol.h>
+#include <pubkey.h>
 #include <random.h>
 #include <span.h>
 #include <streams.h>
@@ -467,7 +468,7 @@ public:
 
 constexpr size_t BIP324_KEY_LEN = 32;
 
-using BIP324Key = std::vector<uint8_t, secure_allocator<uint8_t>>;
+using BIP324Key = CPrivKey;
 
 struct BIP324Keys {
     BIP324Key initiator_F;
@@ -484,7 +485,7 @@ bool DeriveBIP324Keys(ECDHSecret&& ecdh_secret, const Span<uint8_t> initiator_hd
 class CNode
 {
     friend class CConnman;
-    friend struct ConnmanTestMsg;
+    friend class ConnmanTestMsg;
 
 public:
     std::unique_ptr<TransportDeserializer> m_deserializer;
@@ -557,6 +558,7 @@ public:
     const uint64_t nKeyedNetGroup;
     std::atomic_bool fPauseRecv{false};
     std::atomic_bool fPauseSend{false};
+    std::atomic_bool tried_v2_handshake{false};
 
     bool IsOutboundOrBlockRelayConn() const {
         switch (m_conn_type) {
@@ -595,6 +597,11 @@ public:
 
     bool IsInboundConn() const {
         return m_conn_type == ConnectionType::INBOUND;
+    }
+
+    bool PreferV2Conn() const
+    {
+        return SupportsV2Transport(nServices) && SupportsV2Transport(nLocalServices);
     }
 
     bool ExpectServicesFromConn() const {
@@ -677,6 +684,8 @@ public:
     /** Lowest measured round-trip time. Used as an inbound peer eviction
      * criterium in CConnman::AttemptToEvictConnection. */
     std::atomic<std::chrono::microseconds> m_min_ping_time{std::chrono::microseconds::max()};
+
+    EllSqPubKey hdata_ellsq_pubkey;
 
     CNode(NodeId id, ServiceFlags nLocalServicesIn, std::shared_ptr<Sock> sock, const CAddress& addrIn, uint64_t nKeyedNetGroupIn, uint64_t nLocalHostNonceIn, const CAddress& addrBindIn, const std::string& addrNameIn, ConnectionType conn_type_in, bool inbound_onion);
     CNode(const CNode&) = delete;
@@ -766,6 +775,9 @@ public:
         m_min_ping_time = std::min(m_min_ping_time.load(), ping_time);
     }
 
+    void InitV2P2P(const CPubKey& peer_pubkey, const Span<uint8_t> initiator_hdata, const Span<uint8_t> responder_hdata, bool initiating);
+    void EnsureInitV2Key(bool initiating);
+
 private:
     const NodeId id;
     const uint64_t nLocalHostNonce;
@@ -790,6 +802,7 @@ private:
     const ServiceFlags nLocalServices;
 
     std::list<CNetMessage> vRecvMsg; // Used only by SocketHandler thread
+    CKey v2_priv_key;
 
     // Our address, as reported by the peer
     CService addrLocal GUARDED_BY(m_addr_local_mutex);
@@ -905,7 +918,7 @@ public:
     }
 
     CConnman(uint64_t seed0, uint64_t seed1, AddrMan& addrman, bool network_active = true);
-    ~CConnman();
+    virtual ~CConnman();
     bool Start(CScheduler& scheduler, const Options& options);
 
     void StopThreads();
@@ -926,6 +939,7 @@ public:
     bool ForNode(NodeId id, std::function<bool(CNode* pnode)> func);
 
     void PushMessage(CNode* pnode, CSerializedNetMsg&& msg);
+    void PushV2EllSqPubkey(CNode* pnode);
 
     using NodeFn = std::function<void(CNode*)>;
     void ForEachNode(const NodeFn& func)
@@ -1368,7 +1382,7 @@ private:
     };
 
     friend struct CConnmanTest;
-    friend struct ConnmanTestMsg;
+    friend class ConnmanTestMsg;
 };
 
 /** Dump binary message to file, with timestamp */
