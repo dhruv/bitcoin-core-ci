@@ -1233,7 +1233,7 @@ void PeerManagerImpl::InitializeNode(CNode *pnode)
         LOCK(m_peer_mutex);
         m_peer_map.emplace_hint(m_peer_map.end(), nodeid, peer);
     }
-    if (!pnode->IsInboundConn()) {
+    if (!pnode->IsInboundConn() && !pnode->PreferV2Conn()) {
         InitP2P(*pnode, peer->m_tx_relay != nullptr);
     }
 }
