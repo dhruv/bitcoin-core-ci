@@ -16,6 +16,7 @@
 - Wait 1 second
 - Assert that we're still connected
 - Send a ping to no_verack_node and no_version_node
+- Assert that no_version_node gets disconnected
 - Wait 2 seconds
 - Assert that we're no longer connected (timeout to receive version/verack is 3 seconds)
 """
@@ -68,30 +69,27 @@ class TimeoutsTest(BitcoinTestFramework):
 
         with self.nodes[0].assert_debug_log(['Unsupported message "ping" prior to verack from peer=0']):
             no_verack_node.send_message(msg_ping())
-        with self.nodes[0].assert_debug_log(['non-version message before version handshake. Message "ping" from peer=1']):
-            no_version_node.send_message(msg_ping())
+
+        no_version_node.send_message(msg_ping())
+        no_version_node.wait_for_disconnect(timeout=1)
 
         self.mock_forward(1)
 
         assert "version" in no_verack_node.last_message
 
         assert no_verack_node.is_connected
-        assert no_version_node.is_connected
         assert no_send_node.is_connected
 
         no_verack_node.send_message(msg_ping())
-        no_version_node.send_message(msg_ping())
 
         expected_timeout_logs = [
             "version handshake timeout peer=0",
-            "socket no message in first 3 seconds, 1 0 peer=1",
             "socket no message in first 3 seconds, 0 0 peer=2",
         ]
 
         with self.nodes[0].assert_debug_log(expected_msgs=expected_timeout_logs):
             self.mock_forward(2)
             no_verack_node.wait_for_disconnect(timeout=1)
-            no_version_node.wait_for_disconnect(timeout=1)
             no_send_node.wait_for_disconnect(timeout=1)
 
         self.stop_nodes(0)
