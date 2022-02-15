@@ -65,7 +65,8 @@ static_assert (MAX_BLOCK_RELAY_ONLY_ANCHORS <= static_cast<size_t>(MAX_BLOCK_REL
 /** Anchor IP address database file name */
 const char* const ANCHORS_DATABASE_FILENAME = "anchors.dat";
 
-static constexpr uint64_t V2_MAX_PAYLOAD_LENGTH = 0x01000000 - 1; // 2^24 - 1
+static constexpr uint32_t V2_IGNORE_BIT_MASK = (1 << 23);
+static constexpr size_t V2_MAX_PAYLOAD_LENGTH = V2_IGNORE_BIT_MASK - 1; // 2^23 - 1
 
 // How often to dump addresses to peers.dat
 static constexpr std::chrono::minutes DUMP_PEERS_INTERVAL{15};
@@ -888,7 +889,9 @@ int V2TransportDeserializer::readHeader(Span<const uint8_t> msg_bytes)
     }
 
     // we got the AAD bytes at this point (3 bytes encrypted packet length)
-    m_message_size = m_aead->DecryptLength((const uint8_t*)vRecv.data());
+    auto ignore_and_size = m_aead->DecryptLength((const uint8_t*)vRecv.data());
+    m_ignore_bit = ((ignore_and_size & V2_IGNORE_BIT_MASK) != 0);
+    m_message_size = ignore_and_size & ~V2_IGNORE_BIT_MASK;
 
     // reject messages larger than MAX_SIZE
     if (m_message_size > V2_MAX_PAYLOAD_LENGTH) {
@@ -922,7 +925,7 @@ int V2TransportDeserializer::readData(Span<const uint8_t> msg_bytes)
 CNetMessage V2TransportDeserializer::GetMessage(const std::chrono::microseconds time, bool& reject_message, bool& disconnect)
 {
     // Initialize out parameters
-    reject_message = false;
+    reject_message = m_ignore_bit;
     disconnect = false;
 
     // In v2, vRecv contains the encrypted length (AAD), encrypted payload plus the MAC tag
@@ -1010,6 +1013,7 @@ bool V2TransportSerializer::prepareForTransport(CSerializedNetMsg& msg, std::vec
     // prepare the packet length that will later be encrypted and part of the MAC (AAD)
     // the packet length excludes the 16 byte MAC tag
     uint32_t packet_length = serialized_command_size + msg.data.size();
+    assert(packet_length <= V2_MAX_PAYLOAD_LENGTH);
 
     // prepare the packet length & message command and reserve 4 bytes (3bytes AAD + 1byte short-ID)
     std::vector<unsigned char> serialized_header(CHACHA20_POLY1305_AEAD_AAD_LEN + serialized_command_size);
