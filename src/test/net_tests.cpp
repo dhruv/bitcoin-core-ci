@@ -1051,4 +1051,239 @@ BOOST_AUTO_TEST_CASE(net_v2)
     message_serialize_deserialize_test(false, test_msgs);
 }
 
+struct P2PV2Peer {
+    CKey key;
+    std::array<uint8_t, 32> ellswift_r32;
+    EllSwiftPubKey expected_ellswift;
+    std::vector<uint8_t> plaintext;
+    std::vector<uint8_t> ciphertext_0;
+    std::vector<uint8_t> ciphertext_999;
+};
+
+struct P2PV2TestVector {
+    P2PV2Peer initiator;
+    P2PV2Peer responder;
+    ECDHSecret expected_ecdh_secret;
+    BIP324Session expected_bip324_session;
+};
+
+#define PARSE_HEX_COPY(X, Y)  \
+    parsed_hex = ParseHex(X); \
+    memcpy(Y.data(), parsed_hex.data(), parsed_hex.size())
+
+P2PV2TestVector parse_test_vector(const char* initiator_privkey, const char* responder_privkey,
+                                  const char* initiator_ellswift_r32, const char* responder_ellswift_r32,
+                                  const char* initiator_ellswift, const char* responder_ellswift,
+                                  const char* shared_ecdh_secret,
+                                  const char* initiator_L, const char* initiator_P,
+                                  const char* responder_L, const char* responder_P,
+                                  const char* session_id,
+                                  const char* rekey_salt,
+                                  const char* garbage_terminator,
+                                  const char* initiator_contents,
+                                  const char* initiator_ciphertext_0, const char* initiator_ciphertext_999,
+                                  const char* responder_contents,
+                                  const char* responder_ciphertext_0, const char* responder_ciphertext_999)
+{
+    P2PV2TestVector ret;
+    auto parsed_hex = ParseHex(initiator_privkey);
+    ret.initiator.key.Set(parsed_hex.begin(), parsed_hex.end(), false);
+    parsed_hex = ParseHex(responder_privkey);
+    ret.responder.key.Set(parsed_hex.begin(), parsed_hex.end(), false);
+
+    PARSE_HEX_COPY(initiator_ellswift_r32, ret.initiator.ellswift_r32);
+    PARSE_HEX_COPY(responder_ellswift_r32, ret.responder.ellswift_r32);
+    PARSE_HEX_COPY(initiator_ellswift, ret.initiator.expected_ellswift);
+    PARSE_HEX_COPY(responder_ellswift, ret.responder.expected_ellswift);
+    PARSE_HEX_COPY(shared_ecdh_secret, ret.expected_ecdh_secret);
+    PARSE_HEX_COPY(initiator_L, ret.expected_bip324_session.initiator_L);
+    PARSE_HEX_COPY(initiator_P, ret.expected_bip324_session.initiator_P);
+    PARSE_HEX_COPY(responder_L, ret.expected_bip324_session.responder_L);
+    PARSE_HEX_COPY(responder_P, ret.expected_bip324_session.responder_P);
+    PARSE_HEX_COPY(session_id, ret.expected_bip324_session.session_id);
+    PARSE_HEX_COPY(rekey_salt, ret.expected_bip324_session.rekey_salt);
+    PARSE_HEX_COPY(garbage_terminator, ret.expected_bip324_session.garbage_terminator);
+    ret.initiator.plaintext = ParseHex(initiator_contents);
+    ret.initiator.ciphertext_0 = ParseHex(initiator_ciphertext_0);
+    ret.initiator.ciphertext_999 = ParseHex(initiator_ciphertext_999);
+    ret.responder.plaintext = ParseHex(responder_contents);
+    ret.responder.ciphertext_0 = ParseHex(responder_ciphertext_0);
+    ret.responder.ciphertext_999 = ParseHex(responder_ciphertext_999);
+
+    return ret;
+}
+
+void bip324_assert_test_vector(const P2PV2TestVector& tv)
+{
+    auto initiator_ellswift = tv.initiator.key.EllSwiftEncode(tv.initiator.ellswift_r32).value();
+    BOOST_CHECK_EQUAL(HexStr(initiator_ellswift), HexStr(tv.initiator.expected_ellswift));
+
+    auto responder_ellswift = tv.responder.key.EllSwiftEncode(tv.responder.ellswift_r32).value();
+    BOOST_CHECK_EQUAL(HexStr(responder_ellswift), HexStr(tv.responder.expected_ellswift));
+
+    auto initiator_ecdh_secret = tv.initiator.key.ComputeBIP324ECDHSecret(
+            MakeByteSpan(responder_ellswift), MakeByteSpan(initiator_ellswift), true).value();
+    auto responder_ecdh_secret = tv.responder.key.ComputeBIP324ECDHSecret(
+            MakeByteSpan(initiator_ellswift), MakeByteSpan(responder_ellswift), false).value();
+    BOOST_CHECK_EQUAL(HexStr(initiator_ecdh_secret), HexStr(responder_ecdh_secret));
+    BOOST_CHECK_EQUAL(HexStr(initiator_ecdh_secret), HexStr(tv.expected_ecdh_secret));
+
+    BIP324Session v2_session;
+    DeriveBIP324Session(std::move(initiator_ecdh_secret), v2_session);
+
+    BOOST_CHECK_EQUAL(HexStr(v2_session.initiator_L), HexStr(tv.expected_bip324_session.initiator_L));
+    BOOST_CHECK_EQUAL(HexStr(v2_session.initiator_P), HexStr(tv.expected_bip324_session.initiator_P));
+    BOOST_CHECK_EQUAL(HexStr(v2_session.responder_L), HexStr(tv.expected_bip324_session.responder_L));
+    BOOST_CHECK_EQUAL(HexStr(v2_session.responder_P), HexStr(tv.expected_bip324_session.responder_P));
+    BOOST_CHECK_EQUAL(HexStr(v2_session.session_id), HexStr(tv.expected_bip324_session.session_id));
+    BOOST_CHECK_EQUAL(HexStr(v2_session.rekey_salt), HexStr(tv.expected_bip324_session.rekey_salt));
+    BOOST_CHECK_EQUAL(HexStr(v2_session.garbage_terminator), HexStr(tv.expected_bip324_session.garbage_terminator));
+
+    auto initiator_suite = BIP324CipherSuite(v2_session.initiator_L, v2_session.initiator_P, v2_session.rekey_salt);
+    BIP324HeaderFlags flags{BIP324_NONE};
+    std::vector<std::byte> ciphertext_mac;
+    ciphertext_mac.resize(BIP324_LENGTH_FIELD_LEN + BIP324_HEADER_LEN + tv.initiator.plaintext.size() + RFC8439_EXPANSION);
+    for (int i = 0; i < 1000; i++) {
+        BOOST_CHECK(initiator_suite.Crypt({}, MakeByteSpan(tv.initiator.plaintext), MakeWritableByteSpan(ciphertext_mac), flags, true));
+        if (i == 0) {
+            BOOST_CHECK_EQUAL(HexStr(ciphertext_mac), HexStr(tv.initiator.ciphertext_0));
+        } else if (i == 999) {
+            BOOST_CHECK_EQUAL(HexStr(ciphertext_mac), HexStr(tv.initiator.ciphertext_999));
+        }
+    }
+
+    auto responder_suite = BIP324CipherSuite(v2_session.responder_L, v2_session.responder_P, v2_session.rekey_salt);
+    ciphertext_mac.resize(BIP324_LENGTH_FIELD_LEN + BIP324_HEADER_LEN + tv.responder.plaintext.size() + RFC8439_EXPANSION);
+    for (int i = 0; i < 1000; i++) {
+        BOOST_CHECK(responder_suite.Crypt({}, MakeByteSpan(tv.responder.plaintext), MakeWritableByteSpan(ciphertext_mac), flags, true));
+        if (i == 0) {
+            BOOST_CHECK_EQUAL(HexStr(ciphertext_mac), HexStr(tv.responder.ciphertext_0));
+        } else if (i == 999) {
+            BOOST_CHECK_EQUAL(HexStr(ciphertext_mac), HexStr(tv.responder.ciphertext_999));
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(bip324_vectors_test)
+{
+    // BIP324 key derivation uses network magic in the HKDF process. We use mainnet
+    // params here to make it easier for other implementors to use this test as a test vector.
+    SelectParams(CBaseChainParams::MAIN);
+    std::array<P2PV2TestVector, 5> vectors{
+        parse_test_vector(
+            /* initiator_privkey */ "9cdfc7df74056ddebee98e3310026ecb11578cad9c5d09457194cc2162a1973b",
+            /* responder_privkey */ "2030aaaf44a1437c07c938aa33c58751a6aee0c0e48e285f8031b137f498921d",
+            /* initiator_ellswift_r32*/ "c1efb3a6738a6d612f5f27dc35959c7e5c7d3ec15ffae3ca3159abd1582e8db7",
+            /* responder_ellswift_r32 */ "cb9dfe3802ae4caf320971d52f36f284ad88ddb976976cc2deb6bb39d0a79fde",
+            /* initiator_ellswift */ "9b006371b8ceab1a95e87de3e24022c22946f1949a19baee6de14f3abf2d559a95c385732c3d4cf345d158bf72dfc142093a7708c02e96355c010f456f47422d",
+            /* responder_ellswift */ "19a4af4fa003a1ea67c0d25771ba90a81a92490a9a19690eab1b8598744c35aa1ade90c6ce36f122ea909c539115e95907488312e30e90d3c519018f5693b664",
+            /* shared_ecdh_secret */ "cdd947f606ef0075de1a453c6fb412c876656fe3fdca2221ed5f340c86ecd7fe",
+            /* initiator_L */ "1fd73066880c958207b07d7d3af7bc0ad6bca393c29bf0c32f28c8958eb22ca0",
+            /* initiator_P */ "bbe8988a174a52c7064a2ee1ff289eb5d2a8ca1a4c576965b2b2271335d779b9",
+            /* responder_L */ "be8d7a8a2a32a13d4c8f3fca95f0e6bd5e89f36aae0ade88eb71f5688e424cbf",
+            /* responder_P */ "37a1eb3e4c8d00e2806908f81c12e0932b0a042621666aecd6de8a075c290a03",
+            /* session_id */ "60963a88a8511745cd4895837d1d33b630fcb6cf1944a771174c566a693bc28f",
+            /* rekey_salt */ "6994f20646a7ea40a10b889019a957994ea2975fb17bc6",
+            /* garbage_terminator */ "48367e65a72f0814",
+            /* initiator_contents */ "9bc0f24442a76af47b9daa9f0c99d41381c0c06698ffc4ad069acf3d20928277433818565904cdd66ea93b1b755a3293d1d154110faa8add3dcafed2328fffea",
+            /* initiator_ciphertext_0 */ "49667198a7a436855253ab7b4afe2d2b175d8de9d893d70af12666b4059c0a33d24fd959c1c7fde900874577065fe37b58d8532efda65589b0266a41abff44bc1c4c4abbdd3f6ffcff4fa4881307f2ffe2a5ab45",
+            /* initiator_ciphertext_999 */ "e9adb974fe1a878cc73afaf4e26a48b0bfa8d34da6e7ae77dd78a429b688a967982b140e6fd4ad2956a6d7c2537c6d8fb4c8cef2794fc318afe8741524c1fa51890434a00de763b1a119d7a108db213613774b22",
+            /* responder_contents */ "2822acbe87f9e1a284f2eaa9a56f948fc0de0c91f342ae541722b758d7956c9a8fe25b082789a2fb5b23da639d05e438461e7fcf92262dbeaeebbacbf01dcfb2",
+            /* responder_ciphertext_0 */ "77877689f874c64ac33c9d5075f0b540aed647c0466dd1189125160a1291dde56f552842ab36328f21bd438d8b20fae4970f66653475b4941bcfe251b669f9b8056abd1000e8abbe6e2e264c491f967a54bfb700",
+            /* responder_ciphertext_999 */ "97baa1815aeed54e54e3ae6b698b66fa469e9335fd9791a86271e6bbaad3c31975932624976570bdbd465029b749aa9bc91ff563c7d67c9a549e45ef4bc80659c8677d394f7f12ab09cb9a819e355bb80a5f6b65"),
+
+        parse_test_vector(
+            /* initiator_privkey */ "44e5fe764c43d1f7a60ead0acd0e74a4b14f7b7fc056984a993dede99e04c743",
+            /* responder_privkey */ "fe6065b12cdfd53b9cd9b55c491063d60abdccc3090d2cdba17bf093fe363f09",
+            /* initiator_ellswift_r32*/ "f54a836324dcb9c5701c3f73edf96ebfea053a2af1be4e7bb178bf721bad5e4d",
+            /* responder_ellswift_r32 */ "ef7cd5de28f2b6b77f59ef3b4d00939841e0ab9ab5fdd351e83ce0626c90e866",
+            /* initiator_ellswift */ "bd439a4b0cdf1a6ec5a3f10acb97ac2fe11d4c10266c24008f8d963ec40c5468b113ab984858531ecd134d716e31ca6f536bc23b4c56439bfd253f3c74c71883",
+            /* responder_ellswift */ "c6eac141d4740187069e62a07c3549f5e179f676d90a8e333cda843c53127843aa3c5272baae373b3548d2e414c818aeaabc74938059b34c36c915d0e2f08840",
+            /* shared_ecdh_secret */ "ab9c6c533a41976b0c8ee0de0bd45c627300f60b1008aa2fb964e84c8a17da82",
+            /* initiator_L */ "183df1ce9a65a2d0499e378c3bfc9ce62039c8d4fa9818fa9ec4e298a1f09e7c",
+            /* initiator_P */ "5ef004836831f60005ed07457d96c6af4c6ef737ad4bed600e408934d7c9583a",
+            /* responder_L */ "85fffb25b3f3631c22401a84ae2ec5a1aa4b198fffdebf79292a25635d4adc9a",
+            /* responder_P */ "52499ba5781402b56a007f1f21ce1533c44de9d4474e4305d3cae8eb0f4462c1",
+            /* session_id */ "2e3cd741f4d22a44e84837508b5d940340f41c7ebc8d0392386c2a646c513bf8",
+            /* rekey_salt */ "e123e66ef17408ae5cae563432cd85e6ded1f554dce1a5",
+            /* garbage_terminator */ "9ace3ea54b43eb13",
+            /* initiator_contents */ "a4874343279f3ca57427a8649833a7d276023e1035f85a7bfe19597055657192b9d2c102c69f0c8b2fdaeb064cc7432e549614e5aef603f9cf41e44a2f0b41b0",
+            /* initiator_ciphertext_0 */ "e695377c638c0c3b2e3f29e7fdb04ee8e12331eb2f01cee13e3538f9c38b5ff2b056a8464ca176cd870ae4f6db43c5b4559bc608fdcedebb6d69db6d9e40162d0dbd2d0456eea5ab94e3bb78c9e3bdb316e95ed6",
+            /* initiator_ciphertext_999 */ "aec3e7c8cb16b6bc90c8f9a77497fb916e3cb60e59f039224ee705e25828325d362b3d29f487a525249b683f58c43ce5a01a8d41e9625cd6140aa1e66b4ee2cd92b22021cc64b604e00fffef272780d15eac36a0",
+            /* responder_contents */ "dc77639158727bd733b8accc7c4bd27d329653bceace8be353b02fa56dda8598ff52c833e6aa826c9b7458d978490b24e6cd267afe6f4f1f47edf732e6d08beb",
+            /* responder_ciphertext_0 */ "0f9ffa01207908985cb055d85cc765bcf3cc3f7bf49ecd0f2e3afa2469a958cdae43ae8b90046f487dde9e5e97718ef1ea3083ce9ecd63fcf701ead67ba3d21ace40c45a7993ddf3a41aa827defe3d9b81389f3f",
+            /* responder_ciphertext_999 */ "a4f07c92703dd21a9bf8076bffc063360fb3d0e9318b79bdb72a6784c38461e8b847027f7f001ca9f0180c63c2eb92039b8314c8fe04d2cf5d84c2a6512d87cf286ac904956281678cea5abe6ca21b0a2244af47"),
+
+        parse_test_vector(
+            /* initiator_privkey */ "2e26264ea126f08b8baa90f394defc2af8e5e1a3392c1cf6456ba7879494cc29",
+            /* responder_privkey */ "9fc639ee5a340b6d646d3c0ab35e634c565d25d8dde5fa2ca2e79fad07c9a6d5",
+            /* initiator_ellswift_r32*/ "794d7f24d16def675f37c41277349fc7186bfa38943f3e349fb98a9c28cd92a8",
+            /* responder_ellswift_r32 */ "2b8e3b215a08098a43604a9f0305a2ec5f5dc0cc624293fc285c6e5f1ad412f9",
+            /* initiator_ellswift */ "2a5ec3ace440508588d706cbd08ea7bf04b46df6c5bb41c9ca7b07e30fdefc0fb124bb825a4004a56d570860996faba49ad53dd731b27f8482c8eaccc495fcc1",
+            /* responder_ellswift */ "e979b78addd7cf3534214c67a4e11edc772166162bad7ac5eb4f903300e401f7e85189a75aeb741ce5d8812d7be79c514748018123ee3e5a0f0aa34e1515517a",
+            /* shared_ecdh_secret */ "1dbfb470f3cd3ba50c12cb8a35188f4e1c18b173cd81c3be70b6bc8b4369f2d3",
+            /* initiator_L */ "920ebaae8b143f4c159018bf3bf437ebc4a7877c7e2dd43c5a0668bc708d3154",
+            /* initiator_P */ "5b65f85a8a492472aa7d0b8cac54bfa607213b82716638babd4afb16dfcb1e1d",
+            /* responder_L */ "fd2e328b6800b82336b2322edf746b30d4bf74d62499e159f694d302c5838898",
+            /* responder_P */ "e878b3404d68aed887f7a9550cf62dd7df15a244d7b1125b98587da5c4ab8c4b",
+            /* session_id */ "bb98987d00e4528c4affd17cd932881db550949a53aebf1b9c7af427443a3809",
+            /* rekey_salt */ "102be4ead3e400287ce04f8d0134861c1d6bee0ae9067c",
+            /* garbage_terminator */ "08ed8f04c6113ac2",
+            /* initiator_contents */ "868d3648fbd816c72c54c12f403127503ba305eeb1a65a144009fae2b6e3bea4c76034a88ccee3a3396c69a970b4fff2f381097d33943a0d455f6f3303a4d3dd",
+            /* initiator_ciphertext_0 */ "6d34bb2ee92bc56dda1e8e51cdb8b3cb322f9efdcb6346139a2f74cbc26a38a3f1fac67bc526d5358502958372f68fb833b4ec030a4ee95c63ce8b301e3c5196eecdc21768b48a0435ad7137fbf2d76ec2ec41c3",
+            /* initiator_ciphertext_999 */ "036d79e26d7dee458d5a563fca695efcde187e71bcba417430f96d124bc2bebe7063c2a1ea40581b5d2b4ddb9d21c00c361e255ca3925ec89c25d0b74c6f30c20d4865fc6894876ec57d4d8e38841fe93eb3750a",
+            /* responder_contents */ "ba67e844fa8d7aa6b77dbb1737c3080da7b65c36b219d91da499b2fb58b6e6e711e7d2960ce744d1e15351badf205a829f7b55b74e971e0a9547d88ec3c30686",
+            /* responder_ciphertext_0 */ "fb6ac1610c6c38450aadb6a1b7e2c632a59f20975f49f2803db90da45d4ebc331d9373bec7ec79b5a270e061fc5c19a99333f3fe0a1246e70f51117b50666d529488f27ab5341659a65e705b382b485bc1f6170e",
+            /* responder_ciphertext_999 */ "c2114aef9474528c40019e764aa8e90051f69c2a08ba803473413a8ab6dd540688c67f260b29b256d37fa284e109c4543fe65028f41bf005b6e3fe5ba9a768a6fbd854382941dd636816089c7ddf3e5b5b473497"),
+
+        parse_test_vector(
+            /* initiator_privkey */ "a371e20223e60e967233fe079f052aeabd30f6c6781314f3e7c44e049c648b7d",
+            /* responder_privkey */ "8063aec031db643874c6629942c402e48f7d74abaf97a8faf8d4628010e46ba4",
+            /* initiator_ellswift_r32*/ "ec23b3eab32028a9981ff20851abdd10846951b88989950cc31565bd9a3cda79",
+            /* responder_ellswift_r32 */ "546bfd88292d90a9bbf697380c68f017fdf911d20acad6c3c7e900eff0205a83",
+            /* initiator_ellswift */ "141cbda0eb0435e5a7c7317dc5360eb37932951373f3df0d87ec293f859da12c5cfe0c2271b40669388556825f74cb1d8cb1511831230a388dc27dcc1fb51ee6",
+            /* responder_ellswift */ "1c8d9559b0ebebf6e6c7a65f21c4aa1db33ece37cae8affab4150894470b2ffcfe2b80be24710896b47e8c47566e652e4a433fea997fbc06d41f2359a47e2fd4",
+            /* shared_ecdh_secret */ "5ea12a5905298f193b324f640d7fbc7e0e1cb60d4d09b936cea365f0ea6e1324",
+            /* initiator_L */ "668f8d529781c640f2e0065ae11876793dfcfd7b4e964fb0fc0cbca2a78a3d7f",
+            /* initiator_P */ "4ae20c5f96990683e13930a71fdc763a696d6c04a7bed826a4a09ebd75a20847",
+            /* responder_L */ "73b6e6b6be52035c4550b87d7d3e9b8349af5bce6cd8f6067d80ca262f35bc7a",
+            /* responder_P */ "5f7a18ffc2e002a547fe64fdee3e4f434bfc279313712e5a40db84a1d3c2c07e",
+            /* session_id */ "760640e5ad64057042081cf402e9ece226bc41c71302f7e943bfd04c93cb5bd3",
+            /* rekey_salt */ "db9bb1062a1720c133fa56ecac3d6b284515c1e6e01772",
+            /* garbage_terminator */ "900c44a2b53502bd",
+            /* initiator_contents */ "3e7443578c300b7210860c17168c9e11414781f6168710968777b567f1c27165bc8118ef402150549c18de9b567b85d4046fbef91f502f8cf4c298888ddd434b",
+            /* initiator_ciphertext_0 */ "557206bc3072da71eee75162cad463c8f14bd0f776ac6d39c2ef123758db177d939ec202181437194784e2ef0be6c829834b3031e364f22bf367976d6782ae00215c16cccc56b8211521a2a568c704809f517591",
+            /* initiator_ciphertext_999 */ "d8eef0fb876150b52c201f88e6b3d31701c9e3ae4f637be52fd32073c6b712c1fc9bf7c7af37ce68a22e32465c4e3765f713f9d9d9ac19fcc41f4bab85858a1598ceed1c7b6cd5d9780ce80807b54f09e2afe01f",
+            /* responder_contents */ "7f6c9fbae0c003bb38ee2e73c31b248d639cc63b0d5d57b05f57c8b82122d61e401af33d481304a7d956b9ca730500890908682b14933cde958bf497cbcbbd45",
+            /* responder_ciphertext_0 */ "af0d0f3d7f2e0fe4c1a227885ff550c45a9bdfd4108148e3eb0c3b5b0a8e088bb56196bbcadf5c74c6a97ec649c2a50412da5383f306ecc2dc283b4f9878f7127a1516ee3397cd0594e31c9f857222524e4a53c5",
+            /* responder_ciphertext_999 */ "ed94054621b09d8bf5e1c4c29a2e9b6d645f0f45245483ff55097b3efd2a475850d0f0f51d21fb31bd609ca43899c2547c4bfc529e36b6a034ca8d611604a55de7d1e336b4c9a55f52e7669d85491652e312ba18"),
+
+        parse_test_vector(
+            /* initiator_privkey */ "928861cf12421b8174bce71bdbdf4397213e17977e40116d79fd42372dfce856",
+            /* responder_privkey */ "1b06ce10bfdeb76e002d370df40120eb0472b432c5f6535d6a47cff44e126255",
+            /* initiator_ellswift_r32*/ "1f909dc3ba59acbc6d24f589712cba5ac3926d7c8bc79f02316f4d1adb4f1b26",
+            /* responder_ellswift_r32 */ "8bc6a59833a8e94810665ac0360b8c976d3f6dfec9573ae8333759e7d5fa8af8",
+            /* initiator_ellswift */ "762f4b6ea5069f5ed6ee7abe37cb6f2c05487412413895cdd4b5c6ded9dade9e9c11019949cbb4ae4a109fca90de116010327c5b863dae85b1b85d2694656e2e",
+            /* responder_ellswift */ "ad041b394e0819c9da64559351d09405cd434081d9d43137e1dd6727e5f8c7a85b64b19af0a0e401af0daab8928ef3a26634f28b325586d5c9dccd4fa51a70d7",
+            /* shared_ecdh_secret */ "9643234828155404cbefe6160f5ff1a9376cf0be1a66797b558161f8e277e654",
+            /* initiator_L */ "7b747764f7893d9bef2902eee6b1608331b14f40e0fabefd484560d5793bbbcc",
+            /* initiator_P */ "62e7d1dda15efddf9b444635547c89e90be6f671e50262f6ebbafc5f03bfd9ed",
+            /* responder_L */ "1436db0a90eb38ba13846b3ac8d46294092b759f252152814dcda63d2624d764",
+            /* responder_P */ "40335231c3b5d62eaef2e8578083ecb4231f3bd1029a5acd75a933ef858ca9a1",
+            /* session_id */ "4c5ff92a5b5f3568690c560b760ad00822b029bb2d3b7fe3dfc85687977209d7",
+            /* rekey_salt */ "fa4e2e17dab8b6226c6397d631dc0eec54caaad4e549df",
+            /* garbage_terminator */ "751d933b7103262e",
+            /* initiator_contents */ "7ab5826761ecf971d0aeff4c14eed091a206d29ddd84681c206b333bf0e121fcc5f8d45a266ce9ded4f7476edd0ab941c59cf4bca47f9327cf26a78ab4c9e7d6",
+            /* initiator_ciphertext_0 */ "f518fdc5be9e37592b460f1e3ef065ebe698e09c90d34505fa34e142cc8f3be057a4eaea01e15d6f112afd599fae4b09001fa57bcc5ef53c1c4eaa78da9f6fb12bcfb8810e924557d4d545a17273e8eaa25e93e1",
+            /* initiator_ciphertext_999 */ "13d0f4cc580e0e54862f4e05539146c2e42c87e3964c5c47a76314ea4e78f4a51d388b4d5bdcfe3bb63622dccbab31c9a3bfeb2df8e033f6d1a0d190b12a555101ceb00e32383a15da7b82d5f976042c7f57c558",
+            /* responder_contents */ "dee314b076651a31f0e7451f4e0c3cebddeb6ce82d937b14e036cfa8ae8a91d3afd2760351c0c146fe8740874a3e281fb298cb00a1d9e58a1081f173466ceed6",
+            /* responder_ciphertext_0 */ "6d330fcb8c97c9338bac296aed825f40332e9f38c2463a7161d76065be42128eba42687aa9935a519de73de44225b8312d1b80c8c6bc50f3bc8dba888a41bd69ea333669452ffd64da9bbf814e1a410cb751f2f9",
+            /* responder_ciphertext_999 */ "8df6ea625ca7802c3c46bff36ddce949b5262e68309e16ca0ac1306e4e6da13a6a1eb857c0a8cee75116a75fe387909965d738fdd451fdcc60e931c7cac3a10909727a6099042a7ce3bfa1fcef4b912644f908ec"),
+    };
+
+    for (const auto& tv : vectors) {
+        bip324_assert_test_vector(tv);
+    }
+    SelectParams(CBaseChainParams::REGTEST);
+}
 BOOST_AUTO_TEST_SUITE_END()
