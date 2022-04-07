@@ -359,8 +359,8 @@ FUZZ_TARGET_INIT(ecdh, initialize_key)
     CPubKey k1_pubkey = k1.GetPubKey();
     CPubKey k2_pubkey = k2.GetPubKey();
     ECDHSecret ecdh_secret_1, ecdh_secret_2;
-    assert(k1.ComputeECDHSecret(k2_pubkey, ecdh_secret_1));
-    assert(k2.ComputeECDHSecret(k1_pubkey, ecdh_secret_2));
+    assert(k1.ComputeBIP324ECDHSecret(k2_pubkey, ecdh_secret_1));
+    assert(k2.ComputeBIP324ECDHSecret(k1_pubkey, ecdh_secret_2));
     assert(ecdh_secret_1.size() == ECDH_SECRET_SIZE);
     assert(ecdh_secret_2.size() == ECDH_SECRET_SIZE);
     assert(memcmp(ecdh_secret_1.data(), ecdh_secret_2.data(), ECDH_SECRET_SIZE) == 0);

@@ -22,7 +22,7 @@ static void ECDH(benchmark::Bench& bench)
     auto other_pubkey = other_privkey.GetPubKey();
     ECDHSecret ecdh_secret;
     bench.batch(1).unit("ecdh").run([&] {
-        privkey.ComputeECDHSecret(other_pubkey, ecdh_secret);
+        privkey.ComputeBIP324ECDHSecret(other_pubkey, ecdh_secret);
     });
     ECC_Stop();
 }

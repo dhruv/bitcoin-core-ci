@@ -163,7 +163,7 @@ public:
     bool Load(const CPrivKey& privkey, const CPubKey& vchPubKey, bool fSkipCheck);
 
     // Returns false if an invalid public key is provided
-    bool ComputeECDHSecret(const CPubKey& pubkey, ECDHSecret& secret) const;
+    bool ComputeBIP324ECDHSecret(const CPubKey& pubkey, ECDHSecret& secret) const;
 };
 
 struct CExtKey {

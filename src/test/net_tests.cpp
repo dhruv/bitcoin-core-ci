@@ -1017,8 +1017,8 @@ BOOST_AUTO_TEST_CASE(bip324_derivation_test)
     auto responder_pubkey = responder_key.GetPubKey();
 
     ECDHSecret initiator_secret, responder_secret;
-    BOOST_CHECK(initiator_key.ComputeECDHSecret(responder_pubkey, initiator_secret));
-    BOOST_CHECK(responder_key.ComputeECDHSecret(initiator_pubkey, responder_secret));
+    BOOST_CHECK(initiator_key.ComputeBIP324ECDHSecret(responder_pubkey, initiator_secret));
+    BOOST_CHECK(responder_key.ComputeBIP324ECDHSecret(initiator_pubkey, responder_secret));
 
     BOOST_CHECK_EQUAL(ECDH_SECRET_SIZE, initiator_secret.size());
     BOOST_CHECK_EQUAL(ECDH_SECRET_SIZE, responder_secret.size());
