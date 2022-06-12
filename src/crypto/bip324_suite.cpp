@@ -52,19 +52,8 @@ bool BIP324CipherSuite::Crypt(Span<const std::byte> input, Span<std::byte> outpu
         uint32_t ciphertext_len = BIP324_HEADER_LEN + input.size();
         WriteLE32(reinterpret_cast<unsigned char*>(&ciphertext_len), ciphertext_len);
 
-        std::vector<std::byte> input_vec;
-        input_vec.resize(BIP324_HEADER_LEN + input.size());
-
-        // TODO: this can be optimized by changing the RFC8439Encrypt interface to accept a list of inputs.
-        // But, at the moment, there's a potential bug in out ChaCha20 implementation for plaintexts that
-        // are not a multiple of 64 bytes -- the rest of the "block" is discarded. An update is in progress
-        // which will help here.
-        memcpy(input_vec.data(), &flags, BIP324_HEADER_LEN);
-        if (!input.empty()) {
-            memcpy(input_vec.data() + BIP324_HEADER_LEN, input.data(), input.size());
-        }
-
-        auto encrypted = RFC8439Encrypt({}, payload_key, nonce, input_vec);
+        std::vector<Span<const std::byte>> ins{Span{reinterpret_cast<std::byte*>(&flags), BIP324_HEADER_LEN}, input};
+        auto encrypted = RFC8439Encrypt({}, payload_key, nonce, ins);
 
         auto write_pos = output.data();
         fsc20.Crypt({reinterpret_cast<std::byte*>(&ciphertext_len), BIP324_LENGTH_FIELD_LEN},
