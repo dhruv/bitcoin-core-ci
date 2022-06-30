@@ -18,6 +18,7 @@ env:
   ECDH: no
   RECOVERY: no
   SCHNORRSIG: no
+  ELLSWIFT: no
   ### test options
   SECP256K1_TEST_ITERS:
   BENCH: yes
@@ -67,12 +68,12 @@ task:
   << : *LINUX_CONTAINER
   matrix: &ENV_MATRIX
     - env: {WIDEMUL:  int64,  RECOVERY: yes}
-    - env: {WIDEMUL:  int64,                 ECDH: yes, SCHNORRSIG: yes}
+    - env: {WIDEMUL:  int64,                 ECDH: yes, SCHNORRSIG: yes, ELLSWIFT: yes}
     - env: {WIDEMUL: int128}
-    - env: {WIDEMUL: int128,  RECOVERY: yes,            SCHNORRSIG: yes}
+    - env: {WIDEMUL: int128,  RECOVERY: yes,            SCHNORRSIG: yes, ELLSWIFT: yes}
     - env: {WIDEMUL: int128,                 ECDH: yes, SCHNORRSIG: yes}
     - env: {WIDEMUL: int128,  ASM: x86_64}
-    - env: {                  RECOVERY: yes,            SCHNORRSIG: yes}
+    - env: {                  RECOVERY: yes,            SCHNORRSIG: yes, ELLSWIFT: yes}
     - env: {BUILD: distcheck, WITH_VALGRIND: no, CTIMETEST: no, BENCH: no}
     - env: {CPPFLAGS: -DDETERMINISTIC}
     - env: {CFLAGS: -O0, CTIMETEST: no}
@@ -94,6 +95,7 @@ task:
   env:
     HOST: i686-linux-gnu
     ECDH: yes
+    ELLSWIFT: yes
     RECOVERY: yes
     SCHNORRSIG: yes
   matrix:
@@ -176,6 +178,7 @@ task:
     HOST: s390x-linux-gnu
     WITH_VALGRIND: no
     ECDH: yes
+    ELLSWIFT: yes
     RECOVERY: yes
     SCHNORRSIG: yes
     CTIMETEST: no
@@ -195,6 +198,7 @@ task:
     HOST: arm-linux-gnueabihf
     WITH_VALGRIND: no
     ECDH: yes
+    ELLSWIFT: yes
     RECOVERY: yes
     SCHNORRSIG: yes
     CTIMETEST: no
@@ -215,6 +219,7 @@ task:
     HOST: aarch64-linux-gnu
     WITH_VALGRIND: no
     ECDH: yes
+    ELLSWIFT: yes
     RECOVERY: yes
     SCHNORRSIG: yes
     CTIMETEST: no
@@ -232,6 +237,7 @@ task:
     HOST: powerpc64le-linux-gnu
     WITH_VALGRIND: no
     ECDH: yes
+    ELLSWIFT: yes
     RECOVERY: yes
     SCHNORRSIG: yes
     CTIMETEST: no
@@ -268,6 +274,7 @@ task:
     WERROR_CFLAGS: -WX
     WITH_VALGRIND: no
     ECDH: yes
+    ELLSWIFT: yes
     RECOVERY: yes
     EXPERIMENTAL: yes
     SCHNORRSIG: yes
@@ -302,6 +309,7 @@ task:
   << : *LINUX_CONTAINER
   env:
     ECDH: yes
+    ELLSWIFT: yes
     RECOVERY: yes
     SCHNORRSIG: yes
     CTIMETEST: no
@@ -350,6 +358,7 @@ task:
     CPPFLAGS: -DSECP256K1_CPLUSPLUS_TEST_OVERRIDE
     WERROR_CFLAGS:
     ECDH: yes
+    ELLSWIFT: yes
     RECOVERY: yes
     SCHNORRSIG: yes
   << : *MERGE_BASE
