@@ -19,6 +19,7 @@ env:
   RECOVERY: no
   SCHNORRSIG: no
   ELLSQ: no
+  ELLSWIFT: no
   ### test options
   SECP256K1_TEST_ITERS:
   BENCH: yes
@@ -68,12 +69,12 @@ task:
   << : *LINUX_CONTAINER
   matrix: &ENV_MATRIX
     - env: {WIDEMUL:  int64,  RECOVERY: yes}
-    - env: {WIDEMUL:  int64,                 ECDH: yes, SCHNORRSIG: yes, ELLSQ: yes}
+    - env: {WIDEMUL:  int64,                 ECDH: yes, SCHNORRSIG: yes, ELLSQ: yes, ELLSWIFT: yes}
     - env: {WIDEMUL: int128}
-    - env: {WIDEMUL: int128,  RECOVERY: yes,            SCHNORRSIG: yes, ELLSQ: yes}
+    - env: {WIDEMUL: int128,  RECOVERY: yes,            SCHNORRSIG: yes, ELLSQ: yes, ELLSWIFT: yes}
     - env: {WIDEMUL: int128,                 ECDH: yes, SCHNORRSIG: yes}
     - env: {WIDEMUL: int128,  ASM: x86_64}
-    - env: {                  RECOVERY: yes,            SCHNORRSIG: yes, ELLSQ: yes}
+    - env: {                  RECOVERY: yes,            SCHNORRSIG: yes, ELLSQ: yes, ELLSWIFT: yes}
     - env: {BUILD: distcheck, WITH_VALGRIND: no, CTIMETEST: no, BENCH: no}
     - env: {CPPFLAGS: -DDETERMINISTIC}
     - env: {CFLAGS: -O0, CTIMETEST: no}
@@ -96,6 +97,7 @@ task:
     HOST: i686-linux-gnu
     ECDH: yes
     ELLSQ: yes
+    ELLSWIFT: yes
     RECOVERY: yes
     SCHNORRSIG: yes
   matrix:
@@ -179,6 +181,7 @@ task:
     WITH_VALGRIND: no
     ECDH: yes
     ELLSQ: yes
+    ELLSWIFT: yes
     RECOVERY: yes
     SCHNORRSIG: yes
     CTIMETEST: no
@@ -199,6 +202,7 @@ task:
     WITH_VALGRIND: no
     ECDH: yes
     ELLSQ: tes
+    ELLSWIFT: yes
     RECOVERY: yes
     SCHNORRSIG: yes
     CTIMETEST: no
@@ -220,6 +224,7 @@ task:
     WITH_VALGRIND: no
     ECDH: yes
     ELLSQ: yes
+    ELLSWIFT: yes
     RECOVERY: yes
     SCHNORRSIG: yes
     CTIMETEST: no
@@ -238,6 +243,7 @@ task:
     WITH_VALGRIND: no
     ECDH: yes
     ELLSQ: yes
+    ELLSWIFT: yes
     RECOVERY: yes
     SCHNORRSIG: yes
     CTIMETEST: no
@@ -256,6 +262,7 @@ task:
     WITH_VALGRIND: no
     ECDH: yes
     ELLSQ: yes
+    ELLSWIFT: yes
     RECOVERY: yes
     SCHNORRSIG: yes
     CTIMETEST: no
@@ -270,6 +277,7 @@ task:
   env:
     ECDH: yes
     ELLSQ: yes
+    ELLSWIFT: yes
     RECOVERY: yes
     SCHNORRSIG: yes
     CTIMETEST: no
@@ -320,6 +328,7 @@ task:
     WERROR_CFLAGS:
     ECDH: yes
     ELLSQ: yes
+    ELLSWIFT: yes
     RECOVERY: yes
     SCHNORRSIG: yes
   << : *MERGE_BASE
