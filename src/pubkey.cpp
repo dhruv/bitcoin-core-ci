@@ -7,6 +7,7 @@
 
 #include <hash.h>
 #include <secp256k1.h>
+#include <secp256k1_ellswift.h>
 #include <secp256k1_extrakeys.h>
 #include <secp256k1_recovery.h>
 #include <secp256k1_schnorrsig.h>
@@ -332,6 +333,51 @@ bool CPubKey::Derive(CPubKey& pubkeyChild, ChainCode &ccChild, unsigned int nChi
     secp256k1_ec_pubkey_serialize(secp256k1_context_verify, pub, &publen, &pubkey, SECP256K1_EC_COMPRESSED);
     pubkeyChild.Set(pub, pub + publen);
     return true;
+}
+
+std::optional<EllSwiftPubKey> CPubKey::EllSwiftEncode(const std::array<uint8_t, 32>& rnd32) const
+{
+    assert(secp256k1_context_verify && "secp256k1_context_verify must be initialized to use CPubKey.");
+
+    // Only even pub keys can be elligator-swift encoded
+    if (vch[0] != 0x02) {
+        return {};
+    }
+
+    secp256k1_xonly_pubkey pubkey;
+
+    // parse the 32-bytes after the sign.
+    if (!secp256k1_xonly_pubkey_parse(secp256k1_context_verify, &pubkey, vch + 1)) {
+        return {};
+    }
+
+    EllSwiftPubKey encoded_pubkey;
+    secp256k1_ellswift_encode(secp256k1_context_verify, encoded_pubkey.data(), rnd32.data(), &pubkey);
+    return encoded_pubkey;
+}
+
+CPubKey::CPubKey(const EllSwiftPubKey& encoded_pubkey)
+{
+    assert(secp256k1_context_verify && "secp256k1_context_verify must be initialized to use CPubKey.");
+    assert(encoded_pubkey.size() == ELLSWIFT_ENCODED_SIZE && "Elligator-swift encoded pub keys must be 64 bytes");
+
+    secp256k1_xonly_pubkey pubkey;
+    secp256k1_ellswift_decode(secp256k1_context_verify, &pubkey, encoded_pubkey.data());
+
+    XOnlyPubKey xonly;
+
+    secp256k1_xonly_pubkey_serialize(secp256k1_context_verify, xonly.begin(), &pubkey);
+
+    // Workaround: Turn the xonly representation into 0x02 || x-coord
+    // TODO: This can improve once either:
+    // 1. secp256k1_ecdh_xonly_pubkey() is available, or
+    // 2. libsecp256k1 has ecdh routines that work directly on ellswift encodings, or
+    // 3. Ellswift encodings can include the y-sign which would eliminate the even-only requirement
+    std::array<uint8_t, COMPRESSED_SIZE> vch_bytes;
+    vch_bytes[0] = 0x02;
+    memcpy(vch_bytes.data() + 1, xonly.data(), 32);
+
+    Set(vch_bytes.begin(), vch_bytes.end());
 }
 
 void CExtPubKey::Encode(unsigned char code[BIP32_EXTKEY_SIZE]) const {
