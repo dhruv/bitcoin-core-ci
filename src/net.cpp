@@ -15,6 +15,7 @@
 #include <clientversion.h>
 #include <compat.h>
 #include <consensus/consensus.h>
+#include <crypto/hkdf_sha256_32.h>
 #include <crypto/sha256.h>
 #include <node/eviction.h>
 #include <fs.h>
@@ -26,7 +27,7 @@
 #include <protocol.h>
 #include <random.h>
 #include <scheduler.h>
-#include <util/designator.h>
+#include <support/cleanse.h>
 #include <util/sock.h>
 #include <util/strencodings.h>
 #include <util/string.h>
@@ -441,6 +442,42 @@ static CAddress GetBindAddress(const Sock& sock)
         }
     }
     return addr_bind;
+}
+
+bool DeriveBIP324Keys(ECDHSecret&& ecdh_secret, const Span<uint8_t> initiator_hdata, const Span<uint8_t> responder_hdata, BIP324Keys& derived_keys)
+{
+    if (ecdh_secret.size() != ECDH_SECRET_SIZE) {
+        return false;
+    }
+
+    std::string salt{"bitcoin_v2_shared_secret"};
+    salt += std::string{reinterpret_cast<const char*>(Params().MessageStart()), CMessageHeader::MESSAGE_START_SIZE};
+
+    CHKDF_HMAC_SHA256_L32 hkdf(ecdh_secret.data(), ecdh_secret.size(), salt);
+
+    derived_keys.initiator_L.resize(BIP324_KEY_LEN);
+    hkdf.Expand32("initiator_L", derived_keys.initiator_L.data());
+
+    derived_keys.initiator_P.resize(BIP324_KEY_LEN);
+    hkdf.Expand32("initiator_P", derived_keys.initiator_P.data());
+
+    derived_keys.responder_L.resize(BIP324_KEY_LEN);
+    hkdf.Expand32("responder_L", derived_keys.responder_L.data());
+
+    derived_keys.responder_P.resize(BIP324_KEY_LEN);
+    hkdf.Expand32("responder_P", derived_keys.responder_P.data());
+
+    derived_keys.session_id.resize(BIP324_KEY_LEN);
+    hkdf.Expand32("session_id", derived_keys.session_id.data());
+
+    // Since we use sha256 for HKDF, it's reasonable to get 32 bytes and then trim it to 8.
+    // TODO: We could also instead create a new api: CHKDF_HMAC_SHA256_L32::Expand8()
+    derived_keys.garbage_terminator.resize(BIP324_KEY_LEN);
+    hkdf.Expand32("garbage_terminator", derived_keys.garbage_terminator.data());
+    derived_keys.garbage_terminator.resize(BIP324_GARBAGE_TERMINATOR_LEN);
+
+    memory_cleanse(ecdh_secret.data(), ecdh_secret.size());
+    return true;
 }
 
 CNode* CConnman::ConnectNode(CAddress addrConnect, const char *pszDest, bool fCountFailure, ConnectionType conn_type)
@@ -1059,20 +1096,20 @@ bool CConnman::AttemptToEvictConnection()
             if (node->fDisconnect)
                 continue;
             NodeEvictionCandidate candidate{
-                Desig(id) node->GetId(),
-                Desig(m_connected) node->m_connected,
-                Desig(m_min_ping_time) node->m_min_ping_time,
-                Desig(m_last_block_time) node->m_last_block_time,
-                Desig(m_last_tx_time) node->m_last_tx_time,
-                Desig(fRelevantServices) HasAllDesirableServiceFlags(node->nServices),
-                Desig(m_relay_txs) node->m_relays_txs.load(),
-                Desig(fBloomFilter) node->m_bloom_filter_loaded.load(),
-                Desig(nKeyedNetGroup) node->nKeyedNetGroup,
-                Desig(prefer_evict) node->m_prefer_evict,
-                Desig(m_is_local) node->addr.IsLocal(),
-                Desig(m_network) node->ConnectedThroughNetwork(),
-                Desig(m_noban) node->HasPermission(NetPermissionFlags::NoBan),
-                Desig(m_conn_type) node->m_conn_type,
+                .id = node->GetId(),
+                .m_connected = node->m_connected,
+                .m_min_ping_time = node->m_min_ping_time,
+                .m_last_block_time = node->m_last_block_time,
+                .m_last_tx_time = node->m_last_tx_time,
+                .fRelevantServices = HasAllDesirableServiceFlags(node->nServices),
+                .m_relay_txs = node->m_relays_txs.load(),
+                .fBloomFilter = node->m_bloom_filter_loaded.load(),
+                .nKeyedNetGroup = node->nKeyedNetGroup,
+                .prefer_evict = node->m_prefer_evict,
+                .m_is_local = node->addr.IsLocal(),
+                .m_network = node->ConnectedThroughNetwork(),
+                .m_noban = node->HasPermission(NetPermissionFlags::NoBan),
+                .m_conn_type = node->m_conn_type,
             };
             vEvictionCandidates.push_back(candidate);
         }
