@@ -7,6 +7,8 @@
 #include <compat/compat.h>
 #include <crypto/bip324_suite.h>
 #include <cstdint>
+#include <key.h>
+#include <key_io.h>
 #include <net.h>
 #include <net_processing.h>
 #include <netaddress.h>
@@ -991,6 +993,72 @@ BOOST_AUTO_TEST_CASE(net_v2)
 
     message_serialize_deserialize_test(true, test_msgs);
     message_serialize_deserialize_test(false, test_msgs);
+}
+
+BOOST_AUTO_TEST_CASE(bip324_derivation_test)
+{
+    // BIP324 key derivation uses network magic in the HKDF process. We use mainnet
+    // params here to make it easier for other implementors to use this test as a test vector.
+    SelectParams(CBaseChainParams::MAIN);
+    static const std::string strSecret1 = "5HxWvvfubhXpYYpS3tJkw6fq9jE9j18THftkZjHHfmFiWtmAbrj";
+    static const std::string strSecret2C = "L3Hq7a8FEQwJkW1M2GNKDW28546Vp5miewcCzSqUD9kCAXrJdS3g";
+    static const std::string initiator_ellswift_str = "b654960dff0ba8808a34337f46cc68ba7619c9df76d0550639dea62de07d17f9cb61b85f2897834ce12c50b1aefa281944abf2223a5fcf0a2a7d8c022498db35";
+    static const std::string responder_ellswift_str = "ea57aae33e8dd38380c303fb561b741293ef97c780445184cabdb5ef207053db628f2765e5d770f666738112c94714991362f6643d9837e1c89cbd9710b80929";
+
+    auto initiator_ellswift = ParseHex(initiator_ellswift_str);
+    auto responder_ellswift = ParseHex(responder_ellswift_str);
+
+    CKey initiator_key = DecodeSecret(strSecret1);
+    CKey responder_key = DecodeSecret(strSecret2C);
+
+    auto initiator_secret = initiator_key.ComputeBIP324ECDHSecret(MakeByteSpan(responder_ellswift), MakeByteSpan(initiator_ellswift), true);
+    BOOST_CHECK(initiator_secret.has_value());
+    auto responder_secret = responder_key.ComputeBIP324ECDHSecret(MakeByteSpan(initiator_ellswift), MakeByteSpan(responder_ellswift), false);
+    BOOST_CHECK(responder_secret.has_value());
+    BOOST_CHECK(initiator_secret.value() == responder_secret.value());
+    BOOST_CHECK_EQUAL("6cbb9cd446f28623979b16affc4b57c4af95db832cb1a4ff8bc41e3192a33bd8", HexStr(initiator_secret.value()));
+    BOOST_CHECK_EQUAL("6cbb9cd446f28623979b16affc4b57c4af95db832cb1a4ff8bc41e3192a33bd8", HexStr(responder_secret.value()));
+
+    BIP324Keys initiator_keys, responder_keys;
+
+    DeriveBIP324Keys(std::move(initiator_secret.value()), initiator_keys);
+    DeriveBIP324Keys(std::move(responder_secret.value()), responder_keys);
+
+    // Make sure that the ephemeral ECDH secret is cleansed from memory once the keys are derived.
+    BOOST_CHECK_EQUAL("0000000000000000000000000000000000000000000000000000000000000000", HexStr(initiator_secret.value()));
+    BOOST_CHECK_EQUAL("0000000000000000000000000000000000000000000000000000000000000000", HexStr(responder_secret.value()));
+
+    BOOST_CHECK_EQUAL(BIP324_KEY_LEN, initiator_keys.initiator_L.size());
+    BOOST_CHECK_EQUAL(initiator_keys.initiator_L.size(), responder_keys.initiator_L.size());
+    BOOST_CHECK(initiator_keys.initiator_L == responder_keys.initiator_L);
+    BOOST_CHECK_EQUAL("75fa71b052982a72ecb4a0e2a73697857121e4fca2f06e791a5d3c3383d4bb16", HexStr(Span{initiator_keys.initiator_L}));
+
+    BOOST_CHECK_EQUAL(BIP324_KEY_LEN, initiator_keys.initiator_P.size());
+    BOOST_CHECK_EQUAL(initiator_keys.initiator_P.size(), responder_keys.initiator_P.size());
+    BOOST_CHECK(initiator_keys.initiator_P == responder_keys.initiator_P);
+    BOOST_CHECK_EQUAL("bc6617bd1473017b1b40e927c0330b74d1bdd30594a1daa49d89c831f03775cd", HexStr(Span{initiator_keys.initiator_P}));
+
+    BOOST_CHECK_EQUAL(BIP324_KEY_LEN, initiator_keys.responder_L.size());
+    BOOST_CHECK_EQUAL(initiator_keys.responder_L.size(), responder_keys.responder_L.size());
+    BOOST_CHECK(initiator_keys.responder_L == responder_keys.responder_L);
+    BOOST_CHECK_EQUAL("f31764965c22b792a5ac3f35573b01db27a8d479677c53c43d71bbc2141e8886", HexStr(Span{initiator_keys.responder_L}));
+
+    BOOST_CHECK_EQUAL(BIP324_KEY_LEN, initiator_keys.responder_P.size());
+    BOOST_CHECK_EQUAL(initiator_keys.responder_P.size(), responder_keys.responder_P.size());
+    BOOST_CHECK(initiator_keys.responder_P == responder_keys.responder_P);
+    BOOST_CHECK_EQUAL("82c8d144f1dc7b86993c248db020aecfaed37a5c215bea5a7f1bf4399a85ecca", HexStr(Span{initiator_keys.responder_P}));
+
+    BOOST_CHECK_EQUAL(BIP324_KEY_LEN, initiator_keys.session_id.size());
+    BOOST_CHECK_EQUAL(initiator_keys.session_id.size(), responder_keys.session_id.size());
+    BOOST_CHECK(initiator_keys.session_id == responder_keys.session_id);
+    BOOST_CHECK_EQUAL("e6b4d42bc1fbce790cf7b419d0128c7caf319b491acfd9fd874f29ca3843fe40", HexStr(Span{initiator_keys.session_id}));
+
+    BOOST_CHECK_EQUAL(BIP324_GARBAGE_TERMINATOR_LEN, initiator_keys.garbage_terminator.size());
+    BOOST_CHECK_EQUAL(initiator_keys.garbage_terminator.size(), responder_keys.garbage_terminator.size());
+    BOOST_CHECK(initiator_keys.garbage_terminator == responder_keys.garbage_terminator);
+    BOOST_CHECK_EQUAL("118878010356d064", HexStr(Span{initiator_keys.garbage_terminator}));
+
+    SelectParams(CBaseChainParams::REGTEST);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
