@@ -116,6 +116,7 @@ static const uint64_t RANDOMIZER_ID_LOCALHOSTNONCE = 0xd93e69e2bbfa5735ULL; // S
 static const uint64_t RANDOMIZER_ID_ADDRCACHE = 0x1cf2e4ddd306dda9ULL; // SHA256("addrcache")[0:8]
 
 static constexpr uint8_t NET_P2P_V2_CMD_MAX_CHARS_SIZE = 12; // maximum length for V2 (BIP324) string message commands
+static constexpr size_t NET_P2P_V2_MAX_GARBAGE_BYTES = 4095; // maximum length for V2 (BIP324) shapable handshake
 //
 // Global state variables
 //
@@ -689,6 +690,9 @@ void CNode::InitV2P2P(const Span<const std::byte> their_ellswift, const Span<con
         m_deserializer = std::make_unique<V2TransportDeserializer>(GetId(), v2_keys.initiator_L, v2_keys.initiator_P, v2_keys.rekey_salt);
         m_serializer = std::make_unique<V2TransportSerializer>(v2_keys.responder_L, v2_keys.responder_P, v2_keys.rekey_salt);
     }
+    // Both peers must keep around a copy of the garbage terminator for the BIP324 shapable handshake
+    v2_garbage_terminator = v2_keys.garbage_terminator;
+    v2_keys_derived = true;
 }
 
 void CNode::EnsureInitV2Key(bool initiating)
@@ -1547,31 +1551,90 @@ void CConnman::SocketHandlerConnected(const std::vector<CNode*>& nodes,
                 }
                 nBytes = pnode->m_sock->Recv(pchBuf, sizeof(pchBuf), MSG_DONTWAIT);
             }
+            uint8_t* ptr = pchBuf;
             if (nBytes > 0) {
                 bool notify = false;
                 size_t num_bytes = (size_t)nBytes;
-                if (!pnode->ReceiveMsgBytes({pchBuf, num_bytes}, notify)) {
-                    if (gArgs.GetBoolArg("-v2transport", DEFAULT_V2_TRANSPORT) &&
-                        !pnode->tried_v2_handshake && num_bytes >= ELLSWIFT_ENCODED_SIZE) {
+
+                // If we're the inbound peer in between BIP324 v2 key derivation and garbage termination,
+                // or if we're not able to understand the received bytes
+                if ((pnode->m_prefer_p2p_v2 && pnode->IsInboundConn() && !pnode->v2_garbage_terminated) ||
+                    !pnode->ReceiveMsgBytes({ptr, num_bytes}, notify)) {
+                    if (gArgs.GetBoolArg("-v2transport", DEFAULT_V2_TRANSPORT) && !pnode->tried_v2_handshake) {
                         pnode->EnsureInitV2Key(!pnode->IsInboundConn());
 
-                        pnode->InitV2P2P({AsBytePtr(pchBuf), ELLSWIFT_ENCODED_SIZE}, MakeByteSpan(pnode->ellswift_pubkey), !pnode->IsInboundConn());
-                        if (pnode->IsInboundConn()) {
-                            PushV2EllSwiftPubkey(pnode);
+                        if (!pnode->v2_keys_derived) {
+                            if (num_bytes < ELLSWIFT_ENCODED_SIZE) {
+                                pnode->CloseSocketDisconnect();
+                                continue;
+                            } else {
+                                pnode->InitV2P2P({AsBytePtr(ptr), ELLSWIFT_ENCODED_SIZE}, MakeByteSpan(pnode->ellswift_pubkey), !pnode->IsInboundConn());
+
+                                ptr += ELLSWIFT_ENCODED_SIZE;
+                                num_bytes -= ELLSWIFT_ENCODED_SIZE;
+                                if (pnode->IsInboundConn()) {
+                                    // If we're the inbound peer, upon receiving the ellswift bytes we send our ellswift key
+                                    PushV2EllSwiftPubkey(pnode);
+                                    // We now know the peer prefers a BIP324 v2 connection
+                                    pnode->m_prefer_p2p_v2 = true;
+                                } else {
+                                    // If we're the outbound peer, we send the garbage terminator
+                                    PushV2GarbageTerminator(pnode);
+                                }
+                            }
+                            // Send empty message for transport version placeholder
+                            CSerializedNetMsg msg;
+                            PushMessage(pnode, std::move(msg));
                         }
 
-                        // Send empty message for transport version placeholder
-                        CSerializedNetMsg msg;
-                        PushMessage(pnode, std::move(msg));
+                        if (pnode->IsInboundConn() && !pnode->v2_garbage_terminated && num_bytes > 0){
+                            // If we're the inbound peer, we want to keep buffering bytes until we see
+                            // the garbage terminator
+                            auto old_size = pnode->v2_garbage_bytes_recd.size();
+                            auto new_size = old_size + num_bytes;
 
-                        if (!pnode->IsInboundConn()) {
-                            // Outbound peer has completed ECDH and can start the P2P protocol
-                            m_msgproc->InitP2P(*pnode, nLocalServices);
+                            // TODO: Is it better to just allocate to NET_P2P_V2_MAX_GARBAGE_BYTES once?
+                            // TODO: We also don't need to keep all the old bytes here, it could be replaced with a
+                            // count of bytes we have already seen
+                            pnode->v2_garbage_bytes_recd.resize(std::min(new_size, NET_P2P_V2_MAX_GARBAGE_BYTES));
+                            memcpy(pnode->v2_garbage_bytes_recd.data() + old_size, ptr, (new_size - old_size));
+                            auto it = std::search(pnode->v2_garbage_bytes_recd.begin(), pnode->v2_garbage_bytes_recd.end(),
+                                                  pnode->v2_garbage_terminator.begin(), pnode->v2_garbage_terminator.end());
+
+                            if (it != pnode->v2_garbage_bytes_recd.end()) {
+                                // Found the terminator
+                                auto garbage_size = it - pnode->v2_garbage_bytes_recd.begin();
+                                if (garbage_size <= NET_P2P_V2_MAX_GARBAGE_BYTES) {
+                                    // In less than the manimum allowed bytes
+                                    auto fwd = garbage_size + pnode->v2_garbage_terminator.size() - old_size;
+                                    ptr += fwd;
+                                    num_bytes -= fwd;
+
+                                    memory_cleanse(pnode->v2_garbage_bytes_recd.data(), pnode->v2_garbage_bytes_recd.size());
+                                    memory_cleanse(pnode->v2_garbage_terminator.data(), pnode->v2_garbage_terminator.size());
+
+                                    // reduce size to zero to indicate that the garbage was successfully terminated
+                                    pnode->v2_garbage_terminated = true;
+                                } else {
+                                    // But more than the maximum allowed bytes were used
+                                    pnode->CloseSocketDisconnect();
+                                }
+                            } else if (pnode->v2_garbage_bytes_recd.size() >= NET_P2P_V2_MAX_GARBAGE_BYTES) {
+                                pnode->CloseSocketDisconnect();
+                            }
                         }
 
-                        pnode->tried_v2_handshake = true;
-                        if (num_bytes > ELLSWIFT_ENCODED_SIZE && !pnode->ReceiveMsgBytes({pchBuf + ELLSWIFT_ENCODED_SIZE, (size_t)(nBytes - ELLSWIFT_ENCODED_SIZE)}, notify)) {
-                            pnode->CloseSocketDisconnect();
+                        // after a successful ECDH and shapable handshake garbage termination, process the remaining bytes.
+                        if ((!pnode->IsInboundConn() || pnode->v2_garbage_terminated) && num_bytes > 0) {
+                            if (!pnode->ReceiveMsgBytes({ptr, num_bytes}, notify)) {
+                                pnode->CloseSocketDisconnect();
+                            } else {
+                                pnode->tried_v2_handshake = true;
+                                if(!pnode->IsInboundConn()) {
+                                    // Outbound peer has completed ECDH and can start the P2P protocol
+                                    m_msgproc->InitP2P(*pnode, nLocalServices);
+                                }
+                            }
                         }
                     } else {
                         pnode->CloseSocketDisconnect();
@@ -3118,6 +3181,21 @@ void CConnman::PushV2EllSwiftPubkey(CNode* pnode)
     }
 
     if (nBytesSent) RecordBytesSent(nBytesSent);
+}
+
+void CConnman::PushV2GarbageTerminator(CNode* pnode)
+{
+    std::vector<unsigned char> terminator_uchars;
+    terminator_uchars.resize(pnode->v2_garbage_terminator.size());
+    memcpy(terminator_uchars.data(), pnode->v2_garbage_terminator.data(), terminator_uchars.size());
+    {
+        LOCK(pnode->cs_vSend);
+        pnode->nSendSize += pnode->v2_garbage_terminator.size();
+
+        // We do not have to send immediately because this is followed shortly by the
+        // transport version message
+        pnode->vSendMsg.push_back(terminator_uchars);
+    }
 }
 
 bool CConnman::ForNode(NodeId id, std::function<bool(CNode* pnode)> func)
