@@ -66,8 +66,6 @@ static_assert (MAX_BLOCK_RELAY_ONLY_ANCHORS <= static_cast<size_t>(MAX_BLOCK_REL
 /** Anchor IP address database file name */
 const char* const ANCHORS_DATABASE_FILENAME = "anchors.dat";
 
-static constexpr uint64_t V2_MAX_CONTENTS_LENGTH = 0x01000000 - 1; // 2^24 - 1
-
 // How often to dump addresses to peers.dat
 static constexpr std::chrono::minutes DUMP_PEERS_INTERVAL{15};
 
@@ -115,7 +113,6 @@ static const uint64_t RANDOMIZER_ID_LOCALHOSTNONCE = 0xd93e69e2bbfa5735ULL; // S
 static const uint64_t RANDOMIZER_ID_ADDRCACHE = 0x1cf2e4ddd306dda9ULL; // SHA256("addrcache")[0:8]
 
 static constexpr uint8_t V2_MAX_MSG_TYPE_LEN = 12; // maximum length for V2 (BIP324) string message types
-static constexpr size_t V2_MAX_GARBAGE_BYTES = 4095; // maximum length for V2 (BIP324) shapable handshake
 //
 // Global state variables
 //
