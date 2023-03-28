@@ -5,8 +5,9 @@
 // Based on the public domain implementation 'merged' by D. J. Bernstein
 // See https://cr.yp.to/chacha.html.
 
-#include <crypto/common.h>
 #include <crypto/chacha20.h>
+
+#include <crypto/common.h>
 
 #include <algorithm>
 #include <string.h>
@@ -57,6 +58,19 @@ void ChaCha20Aligned::Seek64(uint64_t pos)
 {
     input[8] = pos;
     input[9] = pos >> 32;
+}
+
+void ChaCha20Aligned::SeekRFC8439(uint32_t pos)
+{
+    input[8] = pos;
+}
+
+void ChaCha20Aligned::SetRFC8439Nonce(const std::array<std::byte, 12>& nonce)
+{
+    auto nonce_ptr = reinterpret_cast<const unsigned char*>(nonce.data());
+    input[9] = ReadLE32(nonce_ptr);
+    input[10] = ReadLE32(nonce_ptr + 4);
+    input[11] = ReadLE32(nonce_ptr + 8);
 }
 
 inline void ChaCha20Aligned::Keystream64(unsigned char* c, size_t blocks)
@@ -320,5 +334,19 @@ void ChaCha20::Crypt(const unsigned char* m, unsigned char* c, size_t bytes)
             c[i] = m[i] ^ m_buffer[i];
         }
         m_bufleft = 64 - bytes;
+    }
+}
+
+void FSChaCha20::Crypt(Span<const std::byte> input, Span<std::byte> output)
+{
+    assert(input.size() == output.size());
+    c20.Crypt(reinterpret_cast<const unsigned char*>(input.data()),
+              reinterpret_cast<unsigned char*>(output.data()), input.size());
+    chunk_counter++;
+
+    if (chunk_counter % rekey_interval == 0) {
+        c20.Keystream(reinterpret_cast<unsigned char*>(key.data()), FSCHACHA20_KEYLEN);
+        c20.SetKey32(reinterpret_cast<unsigned char*>(key.data()));
+        set_nonce();
     }
 }
